@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MIT
+#
+# Build automation for canaan_sdk_for_linux.
+#
+#   image-build  Runs ./build.sh setup and ./build.sh nano3s and uploads
+#                build/images/. Both commands run inside the pinned Ubuntu 22.04 container
+#                defined by docker/ (docker/Dockerfile); build.sh installs Docker on Ubuntu
+#                if it is missing. A full build needs about 50 GB of free disk, Docker, and
+#                about 3 GB of toolchain downloads, which GitHub-hosted runners do not
+#                provide. It therefore runs only on a self-hosted runner, and only when the
+#                repository variable K230_IMAGE_BUILD is set to "true". Set that variable
+#                after registering a runner labelled "k230-build". The runner needs Docker,
+#                a user in the docker group, and about 50 GB of free disk.
+#                It runs on push and manual dispatch only, never on pull requests, so
+#                fork code cannot reach the self-hosted runner.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  image-build:
+    name: Image build (nano3s)
+    if: >-
+      vars.K230_IMAGE_BUILD == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, linux, x64, k230-build]
+    timeout-minutes: 720
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Fetch sources and Yocto layers
+        run: ./build.sh setup
+
+      - name: Build nano3s image
+        run: ./build.sh nano3s
+
+      - name: Collect images
+        run: |
+          set -euo pipefail
+          ls -l build/images/
+          test -n "$(ls build/images/*.kdimg.gz 2>/dev/null)"
+          test -n "$(ls build/images/*.aup 2>/dev/null)"
+
+      - name: Upload images
+        uses: actions/upload-artifact@v4
+        with:
+          name: images-nano3s
+          path: |
+            build/images/*.kdimg.gz
+            build/images/*.sha256
+            build/images/*.aup
+          if-no-files-found: error
+          retention-days: 14
